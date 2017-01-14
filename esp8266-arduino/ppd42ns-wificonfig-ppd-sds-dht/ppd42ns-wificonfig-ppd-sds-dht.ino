@@ -151,7 +151,7 @@ char host_custom[100] = "192.168.234.1";
 char url_custom[100] = "/data.php";
 int httpPort_custom = 80;
 
-const char* host_mqtt = "mqtt.opensensors.io";
+const char* mqtt_server = "mqtt.opensensors.io";
 const int mqtt_port = 1883;
 const char* mqtt_user = "";
 const char* mqtt_pwd = "";
@@ -777,7 +777,41 @@ void send_lora(const String& data) {
 /*****************************************************************
 /* send data to mqtt api                                         *
 /*****************************************************************/
-void sendmqtt(const String& data, const char* host, const int mqtt_port) {
+void sendmqtt(const String& data, const char* host, const int port) {
+#if defined(ESP8266)
+  if (!mqtt_client.connected()) {
+    mqtt_client.setServer(host, port);
+    if (mqtt_client.connect(mqtt_client_id, mqtt_user, mqtt_pwd)) {
+      Serial.println("mqtt: connected");
+    } else {
+      Serial.print("connecting failed, rc=");
+      Serial.println(mqtt_client.state());
+    }
+  }
+  if (mqtt_client.connected()) {
+    // data is ~ 1550 bytes, max_size for publish is MQTT_MAX_PACKET_SIZE (128)
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json2data = jsonBuffer.parseObject(data);
+    if (json2data.success()) {
+      String key, val, msg;
+      for (int i=0;i<json2data["sensordatavalues"].size();i++) {
+        key = jsonBuffer.strdup(json2data["sensordatavalues"][i]["value_type"].asString());
+        val = jsonBuffer.strdup(json2data["sensordatavalues"][i]["value"].asString());
+        int spc = val.indexOf(' '); // meh, {"value_type":"signal","value":"-35 dBm"}
+        if (spc >= 0) {
+          val = val.substring(0, spc);
+        }
+        msg = "{\"value_type\":\"" + key + "\",\"value\":" + val + "}";
+        Serial.printf("mqtt: publishing '%s' ... ", msg.c_str());
+        if (mqtt_client.publish(mqtt_topic, msg.c_str())) {
+          Serial.println("ok");
+        } else {
+          Serial.println("failed");
+        }
+      }
+    }
+  }
+#endif
 }
 
 /*****************************************************************
@@ -1651,7 +1685,7 @@ void loop() {
 		if (send2mqtt) {
 			debug_out(txt_sending_to+"mqtt: ",DEBUG_MIN_INFO,1);
 			start_send = micros();
-			sendmqtt(data,host_mqtt,mqtt_port);
+			sendmqtt(data,mqtt_server,mqtt_port);
 			sum_send_time += micros() - start_send;
 		}
 		
@@ -1714,6 +1748,12 @@ void loop() {
 			debug_out("",DEBUG_MIN_INFO,1);
 		}
 	}
+
+ #if defined(ESP8266)
+  if (send2mqtt && mqtt_client.connected()) {
+    mqtt_client.loop();
+  }
+ #endif
 
 	yield();
 }
